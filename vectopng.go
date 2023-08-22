@@ -36,6 +36,13 @@ type vectorPath struct {
 	PathData    string  `xml:"pathData,attr"`
 }
 
+type transform struct {
+	Width   float64
+	Height  float64
+	OffsetX float64
+	OffsetY float64
+}
+
 type colorDef struct {
 	Name  string `xml:"name,attr"`
 	Color string `xml:",chardata"`
@@ -54,11 +61,11 @@ func (cd *colorDefs) String() string {
 func (cd *colorDefs) Set(value string) error {
 	parts := strings.SplitN(value, "=", 2)
 	if len(parts) != 2 {
-		return fmt.Errorf("Invalid color definition \"%s\"", value)
+		return fmt.Errorf("invalid color definition \"%s\"", value)
 	}
 	color, err := parseColor(strings.TrimSpace(parts[1]), nil)
 	if err != nil {
-		return fmt.Errorf("Invalid color definition \"%s\"", value)
+		return fmt.Errorf("invalid color definition \"%s\"", value)
 	}
 
 	name := strings.TrimSpace(parts[0])
@@ -74,10 +81,15 @@ func main() {
 	showVersion := false
 	vectorFile := ""
 	pngFile := ""
+	transform := transform{}
 
 	flag.Var(&colorDefs, "color", "Defines an (A)RGB value for a color name (name=#(a)rgb|(aa)rrggbb)")
 	flag.StringVar(&colorsFile, "colors", colorsFile, "Defines an Android color resource file to be parsed for color definitions")
 	flag.Float64Var(&scaleFactor, "scale", scaleFactor, "Scales the image by the given factor")
+	flag.Float64Var(&transform.Width, "width", transform.Width, "Overrides the canvas width attribute of the vector drawable")
+	flag.Float64Var(&transform.Height, "height", transform.Height, "Overrides the canvas height attribute of the vector drawable")
+	flag.Float64Var(&transform.OffsetX, "x", transform.OffsetX, "Translates the image in x direction")
+	flag.Float64Var(&transform.OffsetY, "y", transform.OffsetY, "Translates the image in y direction")
 	flag.BoolVar(&ios, "ios", ios, "Generates three resolutions of the image (adds @2x and @3x versions)")
 	flag.BoolVar(&showVersion, "version", false, "Shows the program version")
 	flag.Usage = func() {
@@ -120,7 +132,7 @@ func main() {
 		errorExit("Not a valid Android vector drawable", nil)
 	}
 
-	c, err := renderVector(&vec, colorDefs)
+	c, err := renderVector(&vec, colorDefs, transform)
 	if err != nil {
 		errorExit("Cannot render vector file", err)
 	}
@@ -132,21 +144,31 @@ func main() {
 	}
 }
 
-func renderVector(vec *vector, colorDefs colorDefs) (*canvas.Canvas, error) {
-	width, err := parseDpNum(vec.Width, "width")
+func renderVector(vec *vector, colorDefs colorDefs, transform transform) (*canvas.Canvas, error) {
+	originalWidth, err := parseDpNum(vec.Width, "width")
 	if err != nil {
 		return nil, err
 	}
 
-	height, err := parseDpNum(vec.Height, "height")
+	originalHeight, err := parseDpNum(vec.Height, "height")
 	if err != nil {
 		return nil, err
+	}
+
+	width := originalWidth
+	if transform.Width > 0 {
+		width = transform.Width
+	}
+
+	height := originalHeight
+	if transform.Height > 0 {
+		height = transform.Height
 	}
 
 	c := canvas.New(width, height)
 	ctx := canvas.NewContext(c)
 	ctx.SetCoordSystem(canvas.CartesianIV)
-	ctx.SetView(canvas.Identity.Scale(width/vec.ViewportWidth, height/vec.ViewportHeight))
+	ctx.SetView(canvas.Identity.Scale(originalWidth/vec.ViewportWidth, originalHeight/vec.ViewportHeight))
 
 	for _, pathElem := range vec.Paths {
 		path := canvas.MustParseSVGPath(pathElem.PathData)
@@ -167,7 +189,7 @@ func renderVector(vec *vector, colorDefs colorDefs) (*canvas.Canvas, error) {
 			}
 			ctx.SetStrokeColor(c)
 		}
-		ctx.DrawPath(0, 0, path)
+		ctx.DrawPath(transform.OffsetX, transform.OffsetY, path)
 	}
 
 	return c, nil
@@ -193,7 +215,7 @@ func parseColorsFile(colorsFile string, colorDefs *colorDefs) {
 
 	colors := colorsArray.Colors
 	var remainingColors []colorDef
-	for true {
+	for {
 		for _, colorDef := range colors {
 			color, err := parseColor(colorDef.Color, *colorDefs)
 			if err == nil {
@@ -216,7 +238,7 @@ func parseColor(c string, colorDefs colorDefs) (color.Color, error) {
 
 	match := colorPattern.FindSubmatch([]byte(c))
 	if match == nil {
-		return nil, fmt.Errorf("Invalid color \"%s\"", c)
+		return nil, fmt.Errorf("invalid color \"%s\"", c)
 	}
 
 	spec := match[1]
@@ -250,14 +272,14 @@ func parseColor(c string, colorDefs colorDefs) (color.Color, error) {
 		b2 := hexToValue(spec[7])
 		return color.NRGBA{r1<<4 | r2, g1<<4 | g2, b1<<4 | b2, a1<<4 | a2}, nil
 	} else {
-		return nil, fmt.Errorf("Invalid color \"%s\"", c)
+		return nil, fmt.Errorf("invalid color \"%s\"", c)
 	}
 }
 
 func parseDpNum(n string, name string) (float64, error) {
 	match := dpNumPattern.FindStringSubmatch(n)
 	if match == nil {
-		return 0, fmt.Errorf("Invalid %s \"%s\"", name, n)
+		return 0, fmt.Errorf("invalid %s \"%s\"", name, n)
 	}
 
 	width, err := strconv.ParseFloat(match[1], 32)
